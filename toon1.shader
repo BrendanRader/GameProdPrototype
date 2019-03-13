@@ -9,10 +9,54 @@
 		_SSSColor("SSS Tint", Color) = (1,1,1,1)
 		//Combined Map
 		_CombMap("Comb Map", 2D) = "white" {}
+		//control Specular size
+		_SpecPower("Specular Power", Range(0,100)) = 20.0
+		//scale intensity of Specular comp
+		_SpecScale("Specular Scale", Range(0,10)) = 1.0
+		_OutlineColor("Outline Color", Color) = (0,0,0,1)
+		_OutlineThickness("Outline Thickness", Range(0,1)) = 0.3
 	}
 	SubShader {
 		Tags {"RenderType" = "Opaque"}
 		LOD 200
+		
+		//Outline Pass
+		//mix regular vetex/fragment passes with surface passes
+		Pass {
+			Cull Front
+			CGPROGRAM
+			#pragma vertex vert
+			#pragma fragment frag
+
+			#include "UnityCG.cginc"
+
+			half4 _OutlineColor;
+			half _OutlineThickness;
+
+			struct appdata
+			{
+				float4 vertex : POSITION;
+				float3 normal : NORMAL;
+			};
+
+			struct v2f
+			{
+				float4 vertex : SV_POSITION;
+			};
+
+			v2f vert (appdata v)
+			{
+				v2f o;
+				o.vertex = UnityObjectToClipPos(v.vertex+normalize(v.normal)*(_OutlineThickness/100));
+				return o;
+			}
+
+			fixed4 frag (v2f i) : SV_Target
+			{
+				return _OutlineColor;
+			}
+			ENDCG
+		}
 
 		CGPROGRAM
 		#pragma surface surf ToonLighting
@@ -26,6 +70,8 @@
 		half4 _Color;
 		half4 _SSSColor;
 		half _LitOffset;
+		half _SpecPower;
+		half _SpecScale;
 
 		//CustomSurfaceOutput for using extra data from textures
 		struct CustomSurfaceOutput {
@@ -36,6 +82,9 @@
 			half3 SSS;
 			half vertexOc;
 			half Glossy;
+			half Glossiness;
+			half Shadow;
+			half InnerLine;
 		};
 
 		//custom lighting function
@@ -48,13 +97,14 @@
 			
 			//step function to discretize smoothness
 			//Step will return 0 to 1, if second paramater is greater than first 1, else 0
-			float toonL = step(_LitOffset, NdotL) *oc;
+			float toonL = step(_LitOffset, NdotL) * s.Shadow * oc;
 	
 			half3 albedoColor = lerp( s.Albedo * s.SSS, s.Albedo * _LightColor0 * toonL, toonL);
 			
 			//with the pow function, we'll control size of reflection
-			half3 specularColor = saturate( pow(dot(reflect(-lightDir, s.Normal), viewDir), 20));
-			return half4( albedoColor, 1);
+			half3 specularColor = saturate( pow(dot(reflect(-lightDir, s.Normal), viewDir), s.Glossiness * _SpecPower)) 
+								  * toonL * _LightColor0 * s.Glossy * _SpecScale;
+			return half4( (albedoColor + specularColor) * s.InnerLine, 1);
 			//Reads Albedo texture and returns color as is
 			//return half4(s.Albedo,1);
 		}
@@ -72,6 +122,13 @@
 			o.SSS = tex2D(_SSSTex, IN.uv_MainTex) * _SSSColor;
 			o.vertexOc = IN.vertColor.r;
 			o.Glossy = comb.r;
+			//Give Blue CombMap channel a use: scale the Specular Power
+			//Darker is bigger. The smaller the exponent, the bigger the highlight
+			o.Glossiness = comb.b;
+			//Green schannel to add extra shadows. (If textures aren't made correctly, they could pixelate)
+			o.Shadow = comb.g;
+			//Alpha channel used as InnerLine mask. Alpha 0 is a line.
+			o.InnerLine = comb.a;
 		}
 		ENDCG
 	}
